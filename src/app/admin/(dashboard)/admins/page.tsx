@@ -25,14 +25,14 @@ async function AdminList() {
   const { supabase, email: me } = await requireAdmin();
   const { data: admins, error } = await supabase
     .from("admins")
-    .select("email, added_by, created_at")
+    .select("email, added_by, created_at, password_hash")
     .order("created_at", { ascending: true });
 
   return (
     <div className="mt-6 flex flex-col gap-6">
       <section aria-labelledby="add-admin" className="rounded-2xl border border-paper-edge bg-white p-5">
-        <h2 id="add-admin" className="font-display text-lg font-bold text-night">Add an administrator</h2>
-        <p className="mb-3 text-sm text-ash">They sign in at /admin/login with this email — no password needed.</p>
+        <h2 id="add-admin" className="font-display text-lg font-bold text-night">Add an admin or set a password</h2>
+        <p className="mb-3 text-sm text-ash">Enter a new email to add an admin, or an existing admin&apos;s email to give them a new password. They sign in at /admin/login.</p>
         <AddAdminForm />
       </section>
 
@@ -50,6 +50,7 @@ async function AdminList() {
                   <p className="break-all font-mono text-sm text-night">
                     {a.email}
                     {a.email === me ? <span className="ml-2 rounded-full bg-flame-soft px-2 py-0.5 font-sans text-xs font-semibold text-ember-ink">You</span> : null}
+                    {!a.password_hash ? <span className="ml-2 rounded-full bg-sand px-2 py-0.5 font-sans text-xs font-semibold text-ash">No password yet</span> : null}
                   </p>
                   <p className="text-xs text-ash">
                     Added {dateFmt.format(new Date(a.created_at))}

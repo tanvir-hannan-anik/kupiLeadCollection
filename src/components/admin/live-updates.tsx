@@ -4,6 +4,7 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useEffect, useRef, useState } from "react";
 import { interestLabel } from "@/config/lead-form";
+import { getLeadSummary } from "@/app/admin/(dashboard)/actions";
 import { createBrowserSupabase } from "@/lib/supabase/browser";
 
 type Toast = { id: string; leadId: string; name: string; interest: string };
@@ -12,9 +13,12 @@ type Status = "connecting" | "live" | "offline";
 const BASE_TITLE = "Leads dashboard — Kupi";
 
 /**
- * Subscribes to Supabase Realtime for lead changes and keeps every admin page
- * fresh: new leads pop a toast, and stats/tables re-render in place.
- * RLS applies to realtime too, so only admins receive these events.
+ * Keeps every admin page fresh using Supabase Realtime broadcasts.
+ *
+ * Database triggers publish a tiny message on the "admin-feed" channel when a
+ * lead, note or follow-up email changes. The message contains only the row id
+ * (no names, emails or phone numbers), so nothing sensitive is broadcast; the
+ * details are fetched through the server, which checks the admin's JWT.
  */
 export function LiveUpdates() {
   const router = useRouter();
@@ -41,37 +45,30 @@ export function LiveUpdates() {
     };
     document.addEventListener("visibilitychange", onVisible);
 
-    let cancelled = false;
-    const channel = supabase.channel("admin-leads");
+    const showNewLead = async (leadId: string) => {
+      const lead = await getLeadSummary(leadId).catch(() => null);
+      if (!lead) return;
+      const toast = { id: crypto.randomUUID(), leadId, name: lead.name, interest: lead.interest };
+      setToasts((t) => [...t.slice(-2), toast]);
+      setTimeout(() => setToasts((t) => t.filter((x) => x.id !== toast.id)), 8000);
+      if (document.hidden) {
+        unseen.current += 1;
+        document.title = `(${unseen.current}) New lead — Kupi`;
+      }
+    };
 
-    (async () => {
-      // Make sure realtime authenticates as the signed-in admin, not anon.
-      const { data } = await supabase.auth.getSession();
-      if (data.session) await supabase.realtime.setAuth(data.session.access_token);
-      if (cancelled) return;
-
-      channel
-        .on("postgres_changes", { event: "INSERT", schema: "public", table: "leads" }, (payload) => {
-          const row = payload.new as { id: string; full_name: string; interest: string };
-          const toast = { id: crypto.randomUUID(), leadId: row.id, name: row.full_name, interest: row.interest };
-          setToasts((t) => [...t.slice(-2), toast]);
-          setTimeout(() => setToasts((t) => t.filter((x) => x.id !== toast.id)), 8000);
-          if (document.hidden) {
-            unseen.current += 1;
-            document.title = `(${unseen.current}) New lead — Kupi`;
-          }
-          scheduleRefresh();
-        })
-        .on("postgres_changes", { event: "UPDATE", schema: "public", table: "leads" }, scheduleRefresh)
-        .on("postgres_changes", { event: "INSERT", schema: "public", table: "lead_notes" }, scheduleRefresh)
-        .on("postgres_changes", { event: "INSERT", schema: "public", table: "lead_emails" }, scheduleRefresh)
-        .subscribe((s) => {
-          setStatus(s === "SUBSCRIBED" ? "live" : s === "CLOSED" || s === "CHANNEL_ERROR" || s === "TIMED_OUT" ? "offline" : "connecting");
-        });
-    })();
+    const channel = supabase
+      .channel("admin-feed")
+      .on("broadcast", { event: "change" }, ({ payload }) => {
+        const change = payload as { table?: string; op?: string; id?: string };
+        if (change.table === "leads" && change.op === "INSERT" && change.id) void showNewLead(change.id);
+        scheduleRefresh();
+      })
+      .subscribe((s) => {
+        setStatus(s === "SUBSCRIBED" ? "live" : s === "CLOSED" || s === "CHANNEL_ERROR" || s === "TIMED_OUT" ? "offline" : "connecting");
+      });
 
     return () => {
-      cancelled = true;
       document.removeEventListener("visibilitychange", onVisible);
       if (refreshTimer.current) clearTimeout(refreshTimer.current);
       supabase.removeChannel(channel);

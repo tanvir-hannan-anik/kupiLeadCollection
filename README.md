@@ -14,7 +14,7 @@ A one-screen "Let's Get in Touch" lead form for [Kupi](https://kupi-dzon.onrende
 | `src/config/lead-form.ts` | **Interest options**, contact methods, statuses, phone countries, consent wording |
 | `src/lib/validation/lead.ts` | Shared Zod schema (browser + server), phone normalisation to E.164 |
 | `src/app/api/leads/route.ts` | `POST /api/leads` — validation, spam checks, rate limit, dedupe, insert, notify |
-| `src/app/admin/login/*` | Passwordless admin sign-in (magic link or 6-digit code) |
+| `src/app/admin/login/*` | Admin email + password sign-in (JWT session cookie) |
 | `src/app/admin/(dashboard)/leads` | Dashboard: stats, search, filters, table, pagination |
 | `src/app/admin/(dashboard)/leads/[id]` | Lead details, status update, internal notes |
 | `src/app/admin/(dashboard)/admins` | Add / remove administrators |
@@ -30,16 +30,11 @@ A one-screen "Let's Get in Touch" lead form for [Kupi](https://kupi-dzon.onrende
 2. Apply the migrations — either `npm run db:migrate` (uses `SUPABASE_DB_URL`), or paste each file in `supabase/migrations/` into **SQL Editor** in order and **Run**.
    This creates `leads`, `lead_notes`, `admins`, `rate_limits`, enables Row Level Security, turns on Realtime for `leads` / `lead_notes`, and seeds the three admins:
    `251-16-021@diu.edu.bd`, `251-16-012@diu.edu.bd`, `251-16-017@diu.edu.bd`.
-3. **Authentication → URL Configuration:**
-   - *Site URL*: your app URL (e.g. `https://leads.example.com`, or `http://localhost:3000` locally)
-   - *Redirect URLs*: add `https://<your-app>/auth/callback` (and `http://localhost:3000/auth/callback`)
-4. **Authentication → Email Templates → Magic Link** — to let admins sign in from any device, include the code as well as the link:
-   ```html
-   <h2>Sign in to Kupi Leads</h2>
-   <p><a href="{{ .ConfirmationURL }}">Sign in</a></p>
-   <p>Or enter this code: <strong>{{ .Token }}</strong></p>
+3. Give the first admin a password (stored only as a scrypt hash):
+   ```bash
+   ADMIN_PASSWORD='choose-a-strong-password' npm run admin:password -- 251-16-021@diu.edu.bd
    ```
-5. *(Recommended for production)* **Authentication → SMTP Settings** — plug in a real SMTP provider; Supabase's built-in sender is heavily rate limited.
+   Further admins can be added (or given new passwords) from **/admin/admins**.
 
 ### 2. Environment variables
 
@@ -47,7 +42,7 @@ A one-screen "Let's Get in Touch" lead form for [Kupi](https://kupi-dzon.onrende
 cp .env.example .env.local
 ```
 
-Fill in `NEXT_PUBLIC_SUPABASE_URL`, `NEXT_PUBLIC_SUPABASE_ANON_KEY`, `SUPABASE_SERVICE_ROLE_KEY` (Project Settings → API), `NEXT_PUBLIC_APP_URL` and a random `RATE_LIMIT_SALT`. Email notification keys are optional. See comments in `.env.example`.
+Fill in `NEXT_PUBLIC_SUPABASE_URL`, `NEXT_PUBLIC_SUPABASE_ANON_KEY`, `SUPABASE_SERVICE_ROLE_KEY` (Project Settings → API), `NEXT_PUBLIC_APP_URL`, a random `RATE_LIMIT_SALT` and a random `ADMIN_JWT_SECRET` (32+ characters). Email notification keys are optional. See comments in `.env.example`.
 
 > `SUPABASE_SERVICE_ROLE_KEY` is a secret. It is only read in server files that import `server-only`, so it can never be bundled into browser code.
 
@@ -83,10 +78,11 @@ Consent wording (`CONSENT_TEXT`) and the phone-code country list live in the sam
 
 ## Admin access
 
-- Sign in at `/admin/login` with an email on the `admins` list → receive a magic link / code. Non-admins get the same neutral message and no email (no account enumeration).
-- Any admin can add or remove admins at **/admin/admins**. Admins can't remove themselves, so there's always at least one.
-- Access is enforced in three layers: the proxy (redirect), a server-side `requireAdmin()` check in every page/action/route, and **Postgres RLS** using `is_admin()` — even a leaked anon key can't read leads.
-- Admins can only change a lead's `status` (column-level grant); visitor-submitted data is read-only. Leads cannot be deleted through the API.
+- Sign in at `/admin/login` with **email + password**. On success the server issues a signed **JWT** (HS256, 8-hour expiry) in an `httpOnly`, `SameSite=Lax` cookie (`Secure` in production) — page scripts can't read it.
+- Every admin page, server action and API route verifies the JWT **and** checks the admin still exists with a password, so removing an admin revokes access immediately. The proxy redirects anyone without a valid token to the login page.
+- Passwords are stored only as salted **scrypt** hashes. Wrong email and wrong password give the same message and take the same time; logins are rate limited per IP and per account (10 per 15 min).
+- At **/admin/admins** any admin can add an admin (email + password), set a new password for an existing admin, or remove another admin (not themselves).
+- The server talks to Supabase with the service-role key only after these checks; the database keeps RLS on, so the public anon key can't read any lead data.
 
 ## Security & privacy
 
@@ -96,7 +92,7 @@ Consent wording (`CONSENT_TEXT`) and the phone-code country list live in the sam
 | Phone numbers | `libphonenumber-js` validation; stored as E.164 (`+8801712345678`). Bangladeshi local formats (`01712-345678`, `8801…`) accepted |
 | Spam | Hidden honeypot field + minimum fill time (silently accepted, not stored); per-IP rate limit (5 / 10 min) in Postgres keyed by a salted IP hash; origin check; 10 KB body cap |
 | Repeat submissions | Same email or phone + same interest within 24 h → acknowledged without creating a duplicate; button disabled while submitting |
-| Secrets | Only the public anon key reaches the browser; service-role key is server-only |
+| Secrets | Only the public anon key reaches the browser; service-role key and `ADMIN_JWT_SECRET` are server-only |
 | Consent | Required checkbox (unchecked by default); `consent_given`, `consent_timestamp` and the exact `consent_text` are stored |
 | Data minimisation | Only the form fields + UTM tags are stored. No raw IP, no user agent |
 | CSV export | Admin-only, `no-store`, spreadsheet formula injection neutralised, UTF-8 BOM for Bangla names |
@@ -104,13 +100,13 @@ Consent wording (`CONSENT_TEXT`) and the phone-code country list live in the sam
 
 ## Realtime dashboard
 
-Every admin page subscribes to Supabase Realtime (`src/components/admin/live-updates.tsx`):
+Every admin page listens to a Supabase Realtime **broadcast** channel (`src/components/admin/live-updates.tsx`), fed by database triggers (migration `0005`):
 
 - **New lead** → a toast appears with a *View* button, stats and the table refresh in place, and the browser tab shows `(n) New lead` if it's in the background.
 - **Status change / new note** (by any admin) → the open page refreshes automatically.
 - The header pill shows **Live** (green), **Connecting…** or **Offline**.
 
-Realtime respects RLS, so only signed-in admins receive events. Requires `NEXT_PUBLIC_SUPABASE_ANON_KEY` and migration `0002_realtime.sql`.
+Broadcast messages contain only `{ table, op, id }` — never names, emails or phone numbers. The dashboard then fetches the details through the server, which checks the admin's JWT.
 
 ## Follow-up emails
 
@@ -145,11 +141,7 @@ With a provider configured, set `LEAD_NOTIFY_EMAIL` (comma-separated) to get an 
 Works on any Node host (Vercel, Render, etc.):
 
 1. Push the repo, create the project, set every variable from `.env.example` in the host's environment settings.
-2. **Supabase → Authentication → URL Configuration** (required, or admin sign-in links point to localhost):
-   - *Site URL*: your production URL, e.g. `https://kupi-lead-collection.vercel.app`
-   - *Redirect URLs*: add `https://kupi-lead-collection.vercel.app/**` (and keep `http://localhost:3000/**` for local dev)
-   Set `NEXT_PUBLIC_APP_URL` to the deployed URL too.
-   **Supabase → Authentication → SMTP Settings**: without custom SMTP, Supabase only emails members of your Supabase team, so other admins never receive their sign-in email. Use the same Gmail App Password as the follow-up emails.
+2. Make sure `ADMIN_JWT_SECRET` is set in the host's environment (a different random value from your local one is fine) and set `NEXT_PUBLIC_APP_URL` to the deployed URL. No Supabase Auth or SMTP setup is needed for admin sign-in.
 3. Build `npm run build`, start `npm start` (Render: build command `npm install && npm run build`, start command `npm start`).
 4. To embed or post to the API from the main site, add its origin to `LEAD_ALLOWED_ORIGINS`.
 

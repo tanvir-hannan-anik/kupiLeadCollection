@@ -1,13 +1,18 @@
-import { createBrowserClient } from "@supabase/ssr";
+import { createClient, type SupabaseClient } from "@supabase/supabase-js";
+
+let client: SupabaseClient | null = null;
 
 /**
- * Browser client for the admin dashboard (realtime subscriptions).
- * Uses the public anon key + the signed-in admin's session cookie, so Row
- * Level Security decides which rows (and realtime events) it can see.
+ * Browser client used only for the admin dashboard's realtime feed.
+ * It uses the public anon key and never signs in: the broadcast it listens to
+ * carries row ids only, and all data is fetched through the server.
  */
-export function createBrowserSupabase() {
+export function createBrowserSupabase(): SupabaseClient | null {
   const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
   const anonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
   if (!url || !anonKey) return null;
-  return createBrowserClient(url, anonKey);
+  client ??= createClient(url, anonKey, {
+    auth: { persistSession: false, autoRefreshToken: false, detectSessionInUrl: false },
+  });
+  return client;
 }

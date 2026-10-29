@@ -1,7 +1,6 @@
 "use client";
 
 import { zodResolver } from "@hookform/resolvers/zod";
-import Image from "next/image";
 import { useEffect, useRef, useState } from "react";
 import { useForm, useWatch } from "react-hook-form";
 import {
@@ -13,6 +12,7 @@ import {
 } from "@/config/lead-form";
 import { site } from "@/config/site";
 import { Field, FieldError, inputClass, selectClass } from "@/components/ui/field";
+import { KupiCard } from "./kupi-card";
 import {
   leadFormSchema,
   type LeadFormInput,
@@ -48,6 +48,7 @@ function readUtm() {
 export function LeadForm() {
   const [outcome, setOutcome] = useState<Outcome>(null);
   const [serverError, setServerError] = useState<string | null>(null);
+  const [submittedName, setSubmittedName] = useState("");
   const startedAt = useRef(0);
   const honeypot = useRef<HTMLInputElement>(null);
   const successRef = useRef<HTMLDivElement>(null);
@@ -99,6 +100,7 @@ export function LeadForm() {
       } | null;
 
       if (res.ok && data?.ok) {
+        setSubmittedName(values.fullName);
         setOutcome(data.duplicate ? "duplicate" : "success");
         reset(defaultValues);
         return;
@@ -129,16 +131,9 @@ export function LeadForm() {
         tabIndex={-1}
         role="status"
         aria-live="polite"
-        className="flex flex-col items-center text-center px-6 py-10 outline-none animate-rise"
+        className="flex flex-col items-center px-1 py-4 text-center outline-none animate-rise sm:px-4 sm:py-2"
       >
-        <Image
-          src="/brand/shikha-cheer.png"
-          alt=""
-          width={120}
-          height={162}
-          className="h-32 w-auto animate-pop"
-        />
-        <h2 className="mt-4 font-display text-3xl font-extrabold text-night">
+        <h2 className="font-display text-3xl font-extrabold text-night">
           {outcome === "duplicate" ? "We already have your request!" : "You're all set!"}
         </h2>
         <p className="mt-2 max-w-sm text-base text-ink-soft">
@@ -146,7 +141,10 @@ export function LeadForm() {
             ? "We received the same enquiry from you recently. Our team will contact you soon — no need to submit again."
             : "Thank you for your interest! Our team will contact you soon."}
         </p>
-        <div className="mt-6 flex flex-wrap items-center justify-center gap-3">
+        <div className="mt-5 w-full">
+          <KupiCard name={submittedName} />
+        </div>
+        <div className="mt-4 flex flex-wrap items-center justify-center gap-3">
           <a
             href={site.mainUrl}
             className="inline-flex h-11 items-center rounded-full bg-night px-5 text-sm font-semibold text-paper transition hover:bg-panel focus-visible:outline-none focus-visible:ring-4 focus-visible:ring-flame/50"

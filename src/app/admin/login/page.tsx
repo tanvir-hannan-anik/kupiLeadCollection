@@ -7,8 +7,6 @@ export const metadata = { title: "Admin sign in — Kupi", robots: { index: fals
 
 const ERRORS: Record<string, string> = {
   unauthorized: "Please sign in with an admin account to continue.",
-  link_expired: "That sign-in link is invalid or has expired. Request a new one.",
-  not_configured: "Admin sign-in isn't configured yet.",
 };
 
 async function LoginContent({ searchParams }: PageProps<"/admin/login">) {

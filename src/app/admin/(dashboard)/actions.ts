@@ -8,6 +8,7 @@ import { site } from "@/config/site";
 import { requireAdmin } from "@/lib/auth";
 import { sendEmail } from "@/lib/email";
 import { followUpHtml } from "@/lib/follow-up";
+import { hashPassword } from "@/lib/password";
 
 export type ActionResult = { ok: boolean; message?: string };
 
@@ -123,26 +124,50 @@ export async function addLeadNote(_prev: ActionResult | null, formData: FormData
   return { ok: true, message: "Note added." };
 }
 
-export async function addAdmin(_prev: ActionResult | null, formData: FormData): Promise<ActionResult> {
-  const { supabase, email: me } = await requireAdmin();
-  const parsed = z.string().trim().toLowerCase().pipe(z.email()).safeParse(formData.get("email"));
-  if (!parsed.success) return { ok: false, message: "Enter a valid email address." };
+const adminSchema = z.object({
+  email: z.string().trim().toLowerCase().pipe(z.email({ error: "Enter a valid email address." })),
+  password: z
+    .string()
+    .min(8, { error: "Use at least 8 characters for the password." })
+    .max(200, { error: "Password is too long." }),
+});
 
-  const { error } = await supabase.from("admins").insert({ email: parsed.data, added_by: me });
+/** Adds a new admin, or sets a new password for an existing one. */
+export async function saveAdmin(_prev: ActionResult | null, formData: FormData): Promise<ActionResult> {
+  const { supabase, email: me } = await requireAdmin();
+  const parsed = adminSchema.safeParse({ email: formData.get("email"), password: formData.get("password") });
+  if (!parsed.success) return { ok: false, message: parsed.error.issues[0]?.message };
+  const { email, password } = parsed.data;
+
+  const { data: existing } = await supabase.from("admins").select("email").eq("email", email).maybeSingle();
+  const password_hash = await hashPassword(password);
+  const { error } = existing
+    ? await supabase.from("admins").update({ password_hash }).eq("email", email)
+    : await supabase.from("admins").insert({ email, password_hash, added_by: me });
   if (error) {
-    if (error.code === "23505") return { ok: false, message: "That person is already an admin." };
-    console.error("[admin] add admin failed", error.message);
-    return { ok: false, message: "Couldn't add the admin. Please try again." };
+    console.error("[admin] save admin failed", error.message);
+    return { ok: false, message: "Couldn't save the admin. Please try again." };
   }
   refresh();
-  return { ok: true, message: `${parsed.data} can now sign in.` };
+  return {
+    ok: true,
+    message: existing ? `Password updated for ${email}.` : `${email} can now sign in with the password you set.`,
+  };
 }
 
 export async function removeAdmin(formData: FormData): Promise<void> {
   const { supabase, email: me } = await requireAdmin();
   const target = z.string().trim().toLowerCase().pipe(z.email()).safeParse(formData.get("email"));
-  if (!target.success || target.data === me) return; // RLS also blocks self-removal
+  if (!target.success || target.data === me) return; // you can't remove yourself
   const { error } = await supabase.from("admins").delete().eq("email", target.data);
   if (error) console.error("[admin] remove admin failed", error.message);
   refresh();
+}
+
+/** Name + interest for the "New lead" toast (realtime messages carry only the id). */
+export async function getLeadSummary(leadId: string): Promise<{ name: string; interest: string } | null> {
+  const { supabase } = await requireAdmin();
+  if (!uuid.safeParse(leadId).success) return null;
+  const { data } = await supabase.from("leads").select("full_name, interest").eq("id", leadId).maybeSingle();
+  return data ? { name: data.full_name, interest: data.interest } : null;
 }

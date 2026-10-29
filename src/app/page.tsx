@@ -43,7 +43,31 @@ export default function Home() {
         </header>
 
         <div className="relative mt-3 sm:mt-6 lg:mt-auto">
-          <p className="font-mono text-[10px] uppercase tracking-[0.2em] text-flame sm:text-xs">যোগাযোগ · Contact</p>
+          <ul aria-label="Contact Kupi directly" className="flex flex-wrap items-center gap-x-3 gap-y-1 font-mono text-[11px] text-flame sm:text-xs">
+            <li>
+              <a
+                href={`mailto:${site.contact.email}`}
+                className="inline-flex items-center gap-1.5 rounded transition hover:text-paper focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-flame/60"
+              >
+                <svg aria-hidden="true" viewBox="0 0 20 20" className="size-3.5 fill-current">
+                  <path d="M3 4h14a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2Zm0 2v.4l7 4.7 7-4.7V6H3Zm14 2.8-6.4 4.3a1 1 0 0 1-1.2 0L3 8.8V14h14V8.8Z" />
+                </svg>
+                {site.contact.email}
+              </a>
+            </li>
+            <li aria-hidden="true" className="text-paper/30">·</li>
+            <li>
+              <a
+                href={`tel:${site.contact.phone}`}
+                className="inline-flex items-center gap-1.5 rounded transition hover:text-paper focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-flame/60"
+              >
+                <svg aria-hidden="true" viewBox="0 0 20 20" className="size-3.5 fill-current">
+                  <path d="M6.3 2.2a1.5 1.5 0 0 1 1.8.9l1 2.6a1.5 1.5 0 0 1-.4 1.6L7.5 8.4a10.5 10.5 0 0 0 4.1 4.1l1.1-1.2a1.5 1.5 0 0 1 1.6-.4l2.6 1a1.5 1.5 0 0 1 .9 1.8l-.5 2a1.5 1.5 0 0 1-1.6 1.1C9 16.3 3.7 11 3.2 4.3a1.5 1.5 0 0 1 1.1-1.6l2-.5Z" />
+                </svg>
+                {site.contact.phoneLabel}
+              </a>
+            </li>
+          </ul>
           <h1 className="mt-1 font-display text-[2rem] leading-[1.05] font-extrabold sm:mt-2 sm:text-5xl xl:text-6xl">
             Let&apos;s Get in <span className="text-flame">Touch</span>
           </h1>
