@@ -1,26 +1,80 @@
 @import "tailwindcss";
 
-:root {
-  --background: #ffffff;
-  --foreground: #171717;
-}
+/* Kupi design tokens — mirrors the palette used on kupi-dzon.onrender.com */
+@theme {
+  --color-night: #16163a;
+  --color-night-deep: #101030;
+  --color-panel: #1c1a48;
+  --color-panel-line: #33335f;
+  --color-ink: #16163a;
+  --color-ink-soft: #3a3858;
+  --color-ash: #5e5b73;
+  --color-flame: #ffb020;
+  --color-flame-soft: #fff1d1;
+  --color-flame-light: #ffe29a;
+  --color-ember: #e8731a;
+  --color-ember-ink: #8a4a0b;
+  --color-paper: #fbf5e9;
+  --color-paper-edge: #e3d5b6;
+  --color-sand: #f3ead6;
+  --color-shapla: #e4486f;
+  --color-shapla-soft: #fce5eb;
+  --color-shapla-ink: #a8264a;
+  --color-kolapata: #267a4d;
+  --color-kolapata-soft: #e2f1e8;
+  --color-kolapata-glow: #6fd39f;
+  --color-padma: #2459c7;
+  --color-padma-soft: #e6edfb;
+  --color-padma-ink: #1b4597;
+  --color-khata-rule: #ced5e5;
 
-@theme inline {
-  --color-background: var(--background);
-  --color-foreground: var(--foreground);
-  --font-sans: var(--font-geist-sans);
-  --font-mono: var(--font-geist-mono);
-}
+  --font-sans: var(--font-anek), ui-sans-serif, system-ui, sans-serif;
+  --font-display: var(--font-baloo), var(--font-anek), ui-sans-serif, sans-serif;
+  --font-mono: var(--font-plex-mono), ui-monospace, monospace;
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
+  --animate-rise: rise 0.5s cubic-bezier(0.2, 0.8, 0.2, 1) both;
+  --animate-flicker: flicker 3.2s ease-in-out infinite;
+  --animate-pop: pop 0.45s cubic-bezier(0.2, 1.4, 0.4, 1) both;
+
+  @keyframes rise {
+    from { opacity: 0; transform: translateY(10px); }
+    to { opacity: 1; transform: translateY(0); }
+  }
+  @keyframes flicker {
+    0%, 100% { transform: rotate(-2deg) scale(1); }
+    50% { transform: rotate(2deg) scale(1.03); }
+  }
+  @keyframes pop {
+    from { opacity: 0; transform: scale(0.85); }
+    to { opacity: 1; transform: scale(1); }
   }
 }
 
+html {
+  color-scheme: light;
+}
+
 body {
-  background: var(--background);
-  color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
+  background: var(--color-paper);
+  color: var(--color-ink);
+  font-family: var(--font-sans);
+}
+
+/* Notebook (khata) ruling used as a subtle background on paper surfaces.
+   Declared as a utility so responsive variants (e.g. max-sm:bg-white) can override it. */
+@utility khata {
+  background-color: var(--color-paper);
+  background-image: repeating-linear-gradient(
+    to bottom,
+    transparent 0 31px,
+    color-mix(in srgb, var(--color-khata-rule) 55%, transparent) 31px 32px
+  );
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
 }

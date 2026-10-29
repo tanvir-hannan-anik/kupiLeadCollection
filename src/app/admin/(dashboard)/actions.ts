@@ -1,0 +1,148 @@
+"use server";
+
+import { refresh } from "next/cache";
+import { z } from "zod";
+import { FOLLOW_UP_TEMPLATES } from "@/config/follow-up-templates";
+import { LEAD_STATUSES } from "@/config/lead-form";
+import { site } from "@/config/site";
+import { requireAdmin } from "@/lib/auth";
+import { sendEmail } from "@/lib/email";
+import { followUpHtml } from "@/lib/follow-up";
+
+export type ActionResult = { ok: boolean; message?: string };
+
+const uuid = z.uuid();
+
+const followUpSchema = z.object({
+  leadId: uuid,
+  subject: z.string().trim().min(1, { error: "Add a subject." }).max(200, { error: "Subject is too long." }),
+  body: z.string().trim().min(10, { error: "Write the email first." }).max(5000, { error: "Keep the email under 5000 characters." }),
+  template: z.string().refine((t) => t in FOLLOW_UP_TEMPLATES).optional(),
+});
+
+/** Minimum gap between follow-ups to the same lead, to stop accidental double sends. */
+const FOLLOW_UP_COOLDOWN_MS = 60_000;
+
+export async function sendFollowUp(_prev: ActionResult | null, formData: FormData): Promise<ActionResult> {
+  const { supabase, email: sender } = await requireAdmin();
+  const parsed = followUpSchema.safeParse({
+    leadId: formData.get("leadId"),
+    subject: formData.get("subject"),
+    body: formData.get("body"),
+    template: formData.get("template") || undefined,
+  });
+  if (!parsed.success) return { ok: false, message: parsed.error.issues[0]?.message };
+  const { leadId, subject, body, template } = parsed.data;
+
+  const { data: lead } = await supabase
+    .from("leads")
+    .select("id, email, status, consent_given")
+    .eq("id", leadId)
+    .maybeSingle();
+  if (!lead) return { ok: false, message: "Lead not found." };
+  if (!lead.consent_given) return { ok: false, message: "This lead hasn't consented to be contacted." };
+
+  const { data: recent } = await supabase
+    .from("lead_emails")
+    .select("created_at")
+    .eq("lead_id", leadId)
+    .eq("status", "sent")
+    .gte("created_at", new Date(Date.now() - FOLLOW_UP_COOLDOWN_MS).toISOString())
+    .limit(1);
+  if (recent?.length) return { ok: false, message: "A follow-up was just sent to this lead. Please wait a minute." };
+
+  const result = await sendEmail({
+    to: lead.email,
+    subject,
+    text: body,
+    html: followUpHtml(body, { siteUrl: site.mainUrl, signupUrl: `${site.mainUrl}/signup` }),
+    replyTo: sender, // replies go straight to the admin who wrote the email
+  });
+
+  await supabase.from("lead_emails").insert({
+    lead_id: leadId,
+    sent_by: sender,
+    to_email: lead.email,
+    subject,
+    body,
+    template: template ?? null,
+    status: result.ok ? "sent" : "failed",
+    provider_id: result.ok ? result.id : null,
+    error: result.ok ? null : result.error.slice(0, 500),
+  });
+
+  if (!result.ok) {
+    console.error("[follow-up] send failed:", result.error);
+    refresh();
+    return { ok: false, message: `Email could not be sent: ${result.error}` };
+  }
+
+  // First contact made — move the lead along the pipeline.
+  if (lead.status === "New") {
+    await supabase.from("leads").update({ status: "Contacted" }).eq("id", leadId);
+  }
+  refresh();
+  return { ok: true, message: `Follow-up sent to ${lead.email}.` };
+}
+
+export async function updateLeadStatus(leadId: string, status: string): Promise<ActionResult> {
+  const { supabase } = await requireAdmin();
+  const parsed = z.object({ leadId: uuid, status: z.enum(LEAD_STATUSES) }).safeParse({ leadId, status });
+  if (!parsed.success) return { ok: false, message: "Invalid status." };
+
+  const { error, count } = await supabase
+    .from("leads")
+    .update({ status: parsed.data.status }, { count: "exact" })
+    .eq("id", parsed.data.leadId);
+  if (error || count === 0) {
+    console.error("[admin] status update failed", error?.message);
+    return { ok: false, message: "Couldn't update the status. Please try again." };
+  }
+  refresh();
+  return { ok: true, message: `Status set to ${parsed.data.status}.` };
+}
+
+export async function addLeadNote(_prev: ActionResult | null, formData: FormData): Promise<ActionResult> {
+  const { supabase, email } = await requireAdmin();
+  const parsed = z
+    .object({
+      leadId: uuid,
+      body: z.string().trim().min(1, { error: "Write a note first." }).max(2000, { error: "Keep notes under 2000 characters." }),
+    })
+    .safeParse({ leadId: formData.get("leadId"), body: formData.get("body") });
+  if (!parsed.success) return { ok: false, message: parsed.error.issues[0]?.message };
+
+  const { error } = await supabase
+    .from("lead_notes")
+    .insert({ lead_id: parsed.data.leadId, body: parsed.data.body, author_email: email });
+  if (error) {
+    console.error("[admin] add note failed", error.message);
+    return { ok: false, message: "Couldn't save the note. Please try again." };
+  }
+  refresh();
+  return { ok: true, message: "Note added." };
+}
+
+export async function addAdmin(_prev: ActionResult | null, formData: FormData): Promise<ActionResult> {
+  const { supabase, email: me } = await requireAdmin();
+  const parsed = z.string().trim().toLowerCase().pipe(z.email()).safeParse(formData.get("email"));
+  if (!parsed.success) return { ok: false, message: "Enter a valid email address." };
+
+  const { error } = await supabase.from("admins").insert({ email: parsed.data, added_by: me });
+  if (error) {
+    if (error.code === "23505") return { ok: false, message: "That person is already an admin." };
+    console.error("[admin] add admin failed", error.message);
+    return { ok: false, message: "Couldn't add the admin. Please try again." };
+  }
+  refresh();
+  return { ok: true, message: `${parsed.data} can now sign in.` };
+}
+
+export async function removeAdmin(formData: FormData): Promise<void> {
+  const { supabase, email: me } = await requireAdmin();
+  const target = z.string().trim().toLowerCase().pipe(z.email()).safeParse(formData.get("email"));
+  if (!target.success || target.data === me) return; // RLS also blocks self-removal
+  const { error } = await supabase.from("admins").delete().eq("email", target.data);
+  if (error) console.error("[admin] remove admin failed", error.message);
+  refresh();
+}
