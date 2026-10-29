@@ -20,10 +20,11 @@ export function isSessionConfigured(): boolean {
   return secretKey() !== null;
 }
 
-export async function signSession(email: string): Promise<string> {
+/** `version` must match admins.session_version, so bumping it revokes old tokens. */
+export async function signSession(email: string, version: number): Promise<string> {
   const key = secretKey();
   if (!key) throw new Error("ADMIN_JWT_SECRET is missing or shorter than 32 characters.");
-  return new SignJWT({ role: "admin" })
+  return new SignJWT({ role: "admin", ver: version })
     .setProtectedHeader({ alg: "HS256", typ: "JWT" })
     .setSubject(email)
     .setIssuer(ISSUER)
@@ -33,8 +34,10 @@ export async function signSession(email: string): Promise<string> {
     .sign(key);
 }
 
-/** Returns the admin email from a valid token, or null. */
-export async function verifySession(token: string | undefined): Promise<string | null> {
+export type SessionClaims = { email: string; version: number };
+
+/** Returns the admin email and session version from a valid token, or null. */
+export async function verifySession(token: string | undefined): Promise<SessionClaims | null> {
   const key = secretKey();
   if (!token || !key) return null;
   try {
@@ -43,7 +46,9 @@ export async function verifySession(token: string | undefined): Promise<string |
       issuer: ISSUER,
       audience: AUDIENCE,
     });
-    return payload.role === "admin" && typeof payload.sub === "string" ? payload.sub : null;
+    return payload.role === "admin" && typeof payload.sub === "string" && typeof payload.ver === "number"
+      ? { email: payload.sub, version: payload.ver }
+      : null;
   } catch {
     return null;
   }

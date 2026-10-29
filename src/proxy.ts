@@ -23,8 +23,11 @@ export async function proxy(request: NextRequest) {
     return NextResponse.redirect(url);
   }
 
-  // Already signed in → skip the login form.
-  if (signedIn && isLoginPage) {
+  // Already signed in → skip the login form. But not when the server sent us
+  // here because it rejected the session (revoked token, removed admin, or the
+  // database didn't answer): the signature alone looks valid, so bouncing back
+  // would loop forever.
+  if (signedIn && isLoginPage && !request.nextUrl.searchParams.has("error")) {
     return NextResponse.redirect(new URL("/admin/leads", request.url));
   }
 

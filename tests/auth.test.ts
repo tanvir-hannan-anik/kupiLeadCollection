@@ -28,24 +28,24 @@ describe("password hashing", () => {
 
 describe("JWT sessions", () => {
   it("round-trips the admin email", async () => {
-    const token = await signSession("admin@example.com");
-    expect(await verifySession(token)).toBe("admin@example.com");
+    const token = await signSession("admin@example.com", 3);
+    expect(await verifySession(token)).toEqual({ email: "admin@example.com", version: 3 });
   });
 
   it("rejects tampered, foreign and expired tokens", async () => {
-    const token = await signSession("admin@example.com");
+    const token = await signSession("admin@example.com", 3);
     const [h, , s] = token.split(".");
-    const forgedPayload = Buffer.from(JSON.stringify({ sub: "attacker@example.com", role: "admin" })).toString("base64url");
+    const forgedPayload = Buffer.from(JSON.stringify({ sub: "attacker@example.com", role: "admin", ver: 3 })).toString("base64url");
     expect(await verifySession(`${h}.${forgedPayload}.${s}`)).toBeNull();
 
     const otherKey = new TextEncoder().encode("a-completely-different-secret-of-32+-chars");
-    const foreign = await new SignJWT({ role: "admin" })
+    const foreign = await new SignJWT({ role: "admin", ver: 1 })
       .setProtectedHeader({ alg: "HS256" }).setSubject("admin@example.com")
       .setIssuer("kupi-leads").setAudience("kupi-admin").setExpirationTime("1h").sign(otherKey);
     expect(await verifySession(foreign)).toBeNull();
 
     const key = new TextEncoder().encode(process.env.ADMIN_JWT_SECRET);
-    const expired = await new SignJWT({ role: "admin" })
+    const expired = await new SignJWT({ role: "admin", ver: 1 })
       .setProtectedHeader({ alg: "HS256" }).setSubject("admin@example.com")
       .setIssuer("kupi-leads").setAudience("kupi-admin")
       .setIssuedAt(Math.floor(Date.now() / 1000) - 7200).setExpirationTime(Math.floor(Date.now() / 1000) - 3600).sign(key);
@@ -53,5 +53,13 @@ describe("JWT sessions", () => {
 
     expect(await verifySession(undefined)).toBeNull();
     expect(await verifySession("garbage")).toBeNull();
+  });
+
+  it("rejects tokens without a session version", async () => {
+    const key = new TextEncoder().encode(process.env.ADMIN_JWT_SECRET);
+    const legacy = await new SignJWT({ role: "admin" })
+      .setProtectedHeader({ alg: "HS256" }).setSubject("admin@example.com")
+      .setIssuer("kupi-leads").setAudience("kupi-admin").setExpirationTime("1h").sign(key);
+    expect(await verifySession(legacy)).toBeNull();
   });
 });

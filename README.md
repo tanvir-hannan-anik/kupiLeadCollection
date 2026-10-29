@@ -79,10 +79,11 @@ Consent wording (`CONSENT_TEXT`) and the phone-code country list live in the sam
 ## Admin access
 
 - Sign in at `/admin/login` with **email + password**. On success the server issues a signed **JWT** (HS256, 8-hour expiry) in an `httpOnly`, `SameSite=Lax` cookie (`Secure` in production) — page scripts can't read it.
-- Every admin page, server action and API route verifies the JWT **and** checks the admin still exists with a password, so removing an admin revokes access immediately. The proxy redirects anyone without a valid token to the login page.
+- Every admin page, server action and API route verifies the JWT **and** checks the admin still exists with a password and that the token's **session version** is current. Removing an admin, **signing out** (signs out every device) or **changing the password** (signs out every other device) revokes older tokens immediately.
 - Passwords are stored only as salted **scrypt** hashes. Wrong email and wrong password give the same message and take the same time; logins are rate limited per IP and per account (10 per 15 min).
-- At **/admin/admins** any admin can add an admin (email + password), set a new password for an existing admin, or remove another admin (not themselves).
-- The server talks to Supabase with the service-role key only after these checks; the database keeps RLS on, so the public anon key can't read any lead data.
+- At **/admin/admins** any admin can add an admin with a starting password, set the first password for an admin marked *No password yet*, or remove another admin (not themselves). **Existing passwords can only be changed by their owner** (*Change my password*, which requires the current password) — so one admin can't take over another's account.
+- The server talks to Supabase with the service-role key only after these checks. The database grants **nothing** to the `anon` or `authenticated` roles (RLS on, no policies), so neither the public anon key nor a Supabase Auth sign-up can read any data.
+- Server Actions are public HTTP endpoints by design, so every exported action checks the admin first, and helpers like issuing the session cookie live in `server-only` modules instead.
 
 ## Security & privacy
 
@@ -92,15 +93,16 @@ Consent wording (`CONSENT_TEXT`) and the phone-code country list live in the sam
 | Phone numbers | `libphonenumber-js` validation; stored as E.164 (`+8801712345678`). Bangladeshi local formats (`01712-345678`, `8801…`) accepted |
 | Spam | Hidden honeypot field + minimum fill time (silently accepted, not stored); per-IP rate limit (5 / 10 min) in Postgres keyed by a salted IP hash; origin check; 10 KB body cap |
 | Repeat submissions | Same email or phone + same interest within 24 h → acknowledged without creating a duplicate; button disabled while submitting |
-| Secrets | Only the public anon key reaches the browser; service-role key and `ADMIN_JWT_SECRET` are server-only |
+| Secrets | The browser never talks to Supabase; the service-role key and `ADMIN_JWT_SECRET` are server-only |
 | Consent | Required checkbox (unchecked by default); `consent_given`, `consent_timestamp` and the exact `consent_text` are stored |
 | Data minimisation | Only the form fields + UTM tags are stored. No raw IP, no user agent |
 | CSV export | Admin-only, `no-store`, spreadsheet formula injection neutralised, UTF-8 BOM for Bangla names |
-| Headers | `X-Frame-Options: DENY`, `nosniff`, strict referrer policy; `/admin` is `noindex` |
+| Headers | Content-Security-Policy (same-origin only), HSTS, `X-Frame-Options: DENY`, `nosniff`, strict referrer policy, COOP; `/admin` is `noindex`, `no-store` |
+| Database | `anon`/`authenticated` have no table or function access; dashboard realtime uses a private channel only the server can read |
 
 ## Realtime dashboard
 
-Every admin page listens to a Supabase Realtime **broadcast** channel (`src/components/admin/live-updates.tsx`), fed by database triggers (migration `0005`):
+Database triggers publish to a **private** Supabase Realtime channel that only the service role can read. Each admin page opens a same-origin Server-Sent Events stream (`/api/admin/events`), which checks the admin's JWT and relays the messages (`src/components/admin/live-updates.tsx`). Nobody can listen to or spoof the feed with the public key:
 
 - **New lead** → a toast appears with a *View* button, stats and the table refresh in place, and the browser tab shows `(n) New lead` if it's in the background.
 - **Status change / new note** (by any admin) → the open page refreshes automatically.

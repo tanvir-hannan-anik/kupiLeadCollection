@@ -1,5 +1,6 @@
 import { Suspense } from "react";
 import { AddAdminForm } from "@/components/admin/add-admin-form";
+import { ChangePasswordForm } from "@/components/admin/change-password-form";
 import { SubmitButton } from "@/components/admin/submit-button";
 import { requireAdmin } from "@/lib/auth";
 import { removeAdmin } from "../actions";
@@ -31,9 +32,15 @@ async function AdminList() {
   return (
     <div className="mt-6 flex flex-col gap-6">
       <section aria-labelledby="add-admin" className="rounded-2xl border border-paper-edge bg-white p-5">
-        <h2 id="add-admin" className="font-display text-lg font-bold text-night">Add an admin or set a password</h2>
-        <p className="mb-3 text-sm text-ash">Enter a new email to add an admin, or an existing admin&apos;s email to give them a new password. They sign in at /admin/login.</p>
+        <h2 id="add-admin" className="font-display text-lg font-bold text-night">Add an admin</h2>
+        <p className="mb-3 text-sm text-ash">Add a new admin with a starting password, or set the first password for an admin marked “No password yet”. Existing passwords can only be changed by their owner.</p>
         <AddAdminForm />
+      </section>
+
+      <section aria-labelledby="change-password" className="rounded-2xl border border-paper-edge bg-white p-5">
+        <h2 id="change-password" className="font-display text-lg font-bold text-night">Change my password</h2>
+        <p className="mb-3 text-sm text-ash">Changing your password signs you out on every other device.</p>
+        <ChangePasswordForm />
       </section>
 
       <section aria-labelledby="admin-list" className="overflow-hidden rounded-2xl border border-paper-edge bg-white">

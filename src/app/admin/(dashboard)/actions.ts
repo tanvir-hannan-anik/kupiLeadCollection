@@ -8,7 +8,8 @@ import { site } from "@/config/site";
 import { requireAdmin } from "@/lib/auth";
 import { sendEmail } from "@/lib/email";
 import { followUpHtml } from "@/lib/follow-up";
-import { hashPassword } from "@/lib/password";
+import { hashPassword, verifyPassword } from "@/lib/password";
+import { setSessionCookie } from "@/lib/session-cookie";
 
 export type ActionResult = { ok: boolean; message?: string };
 
@@ -132,14 +133,33 @@ const adminSchema = z.object({
     .max(200, { error: "Password is too long." }),
 });
 
-/** Adds a new admin, or sets a new password for an existing one. */
+/**
+ * Adds a new admin, or sets the first password for an admin who has none yet.
+ * It never overwrites an existing password — otherwise one admin could take
+ * over another's account. People change their own password with
+ * `changeOwnPassword`, which requires the current one.
+ */
 export async function saveAdmin(_prev: ActionResult | null, formData: FormData): Promise<ActionResult> {
   const { supabase, email: me } = await requireAdmin();
   const parsed = adminSchema.safeParse({ email: formData.get("email"), password: formData.get("password") });
   if (!parsed.success) return { ok: false, message: parsed.error.issues[0]?.message };
   const { email, password } = parsed.data;
 
-  const { data: existing } = await supabase.from("admins").select("email").eq("email", email).maybeSingle();
+  const { data: existing } = await supabase
+    .from("admins")
+    .select("email, password_hash")
+    .eq("email", email)
+    .maybeSingle();
+  if (existing?.password_hash) {
+    return {
+      ok: false,
+      message:
+        email === me
+          ? "Use “Change my password” below to change your own password."
+          : "That admin already has a password. Only they can change it (or remove and re-add them).",
+    };
+  }
+
   const password_hash = await hashPassword(password);
   const { error } = existing
     ? await supabase.from("admins").update({ password_hash }).eq("email", email)
@@ -151,8 +171,48 @@ export async function saveAdmin(_prev: ActionResult | null, formData: FormData):
   refresh();
   return {
     ok: true,
-    message: existing ? `Password updated for ${email}.` : `${email} can now sign in with the password you set.`,
+    message: existing ? `Password set for ${email}.` : `${email} can now sign in with the password you set.`,
   };
+}
+
+const changePasswordSchema = z
+  .object({
+    current: z.string().min(1, { error: "Enter your current password." }).max(200),
+    next: z
+      .string()
+      .min(10, { error: "Use at least 10 characters for the new password." })
+      .max(200, { error: "Password is too long." }),
+    confirm: z.string(),
+  })
+  .refine((d) => d.next === d.confirm, { path: ["confirm"], error: "The new passwords don't match." })
+  .refine((d) => d.next !== d.current, { path: ["next"], error: "Choose a password different from the current one." });
+
+/** Changes the signed-in admin's password and signs out every other session. */
+export async function changeOwnPassword(_prev: ActionResult | null, formData: FormData): Promise<ActionResult> {
+  const { supabase, email, sessionVersion } = await requireAdmin();
+  const parsed = changePasswordSchema.safeParse({
+    current: formData.get("current"),
+    next: formData.get("next"),
+    confirm: formData.get("confirm"),
+  });
+  if (!parsed.success) return { ok: false, message: parsed.error.issues[0]?.message };
+
+  const { data } = await supabase.from("admins").select("password_hash").eq("email", email).maybeSingle();
+  if (!(await verifyPassword(parsed.data.current, data?.password_hash))) {
+    return { ok: false, message: "Your current password is incorrect." };
+  }
+
+  const nextVersion = sessionVersion + 1;
+  const { error } = await supabase
+    .from("admins")
+    .update({ password_hash: await hashPassword(parsed.data.next), session_version: nextVersion })
+    .eq("email", email);
+  if (error) {
+    console.error("[admin] change password failed", error.message);
+    return { ok: false, message: "Couldn't change the password. Please try again." };
+  }
+  await setSessionCookie(email, nextVersion); // keep this session, revoke all others
+  return { ok: true, message: "Password changed. Other devices have been signed out." };
 }
 
 export async function removeAdmin(formData: FormData): Promise<void> {

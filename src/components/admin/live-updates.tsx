@@ -5,7 +5,6 @@ import { useRouter } from "next/navigation";
 import { useEffect, useRef, useState } from "react";
 import { interestLabel } from "@/config/lead-form";
 import { getLeadSummary } from "@/app/admin/(dashboard)/actions";
-import { createBrowserSupabase } from "@/lib/supabase/browser";
 
 type Toast = { id: string; leadId: string; name: string; interest: string };
 type Status = "connecting" | "live" | "offline";
@@ -13,28 +12,35 @@ type Status = "connecting" | "live" | "offline";
 const BASE_TITLE = "Leads dashboard — Kupi";
 
 /**
- * Keeps every admin page fresh using Supabase Realtime broadcasts.
+ * Keeps every admin page fresh.
  *
- * Database triggers publish a tiny message on the "admin-feed" channel when a
- * lead, note or follow-up email changes. The message contains only the row id
- * (no names, emails or phone numbers), so nothing sensitive is broadcast; the
- * details are fetched through the server, which checks the admin's JWT.
+ * The browser opens a Server-Sent Events stream to /api/admin/events, which
+ * checks the admin's JWT and relays changes from a PRIVATE Supabase Realtime
+ * channel. Messages carry only { table, op, id }; details are fetched through
+ * the JWT-checked server. Refreshes are throttled and toasts de-duplicated, so
+ * even a burst of events can't hammer the dashboard.
  */
+const REFRESH_EVERY_MS = 2000;
+
 export function LiveUpdates() {
   const router = useRouter();
   const [status, setStatus] = useState<Status>("connecting");
   const [toasts, setToasts] = useState<Toast[]>([]);
   const refreshTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const lastRefresh = useRef(0);
+  const seenLeads = useRef(new Set<string>());
   const unseen = useRef(0);
 
   useEffect(() => {
-    const supabase = createBrowserSupabase();
-    if (!supabase) return;
-
-    // Coalesce bursts of events into a single server re-render.
+    // Throttle: at most one server re-render every REFRESH_EVERY_MS.
     const scheduleRefresh = () => {
-      if (refreshTimer.current) clearTimeout(refreshTimer.current);
-      refreshTimer.current = setTimeout(() => router.refresh(), 400);
+      if (refreshTimer.current) return;
+      const wait = Math.max(0, lastRefresh.current + REFRESH_EVERY_MS - Date.now());
+      refreshTimer.current = setTimeout(() => {
+        refreshTimer.current = null;
+        lastRefresh.current = Date.now();
+        router.refresh();
+      }, Math.max(wait, 300));
     };
 
     const onVisible = () => {
@@ -46,6 +52,8 @@ export function LiveUpdates() {
     document.addEventListener("visibilitychange", onVisible);
 
     const showNewLead = async (leadId: string) => {
+      if (seenLeads.current.has(leadId) || seenLeads.current.size > 200) return;
+      seenLeads.current.add(leadId);
       const lead = await getLeadSummary(leadId).catch(() => null);
       if (!lead) return;
       const toast = { id: crypto.randomUUID(), leadId, name: lead.name, interest: lead.interest };
@@ -57,21 +65,33 @@ export function LiveUpdates() {
       }
     };
 
-    const channel = supabase
-      .channel("admin-feed")
-      .on("broadcast", { event: "change" }, ({ payload }) => {
-        const change = payload as { table?: string; op?: string; id?: string };
+    let failures = 0;
+    const source = new EventSource("/api/admin/events");
+    source.addEventListener("ready", () => {
+      failures = 0;
+      setStatus("live");
+    });
+    source.addEventListener("change", (event) => {
+      try {
+        const change = JSON.parse((event as MessageEvent<string>).data) as { table?: string; op?: string; id?: string };
         if (change.table === "leads" && change.op === "INSERT" && change.id) void showNewLead(change.id);
         scheduleRefresh();
-      })
-      .subscribe((s) => {
-        setStatus(s === "SUBSCRIBED" ? "live" : s === "CLOSED" || s === "CHANNEL_ERROR" || s === "TIMED_OUT" ? "offline" : "connecting");
-      });
+      } catch {
+        // ignore malformed messages
+      }
+    });
+    source.onerror = () => {
+      failures += 1;
+      setStatus(failures > 3 ? "offline" : "connecting");
+      // Repeated failures usually mean the session ended: re-render, which
+      // redirects to the login page if the JWT is no longer valid.
+      if (failures === 4) router.refresh();
+    };
 
     return () => {
       document.removeEventListener("visibilitychange", onVisible);
       if (refreshTimer.current) clearTimeout(refreshTimer.current);
-      supabase.removeChannel(channel);
+      source.close();
     };
   }, [router]);
 

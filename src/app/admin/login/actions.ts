@@ -3,9 +3,11 @@
 import { cookies, headers } from "next/headers";
 import { redirect } from "next/navigation";
 import { z } from "zod";
+import { getAdmin } from "@/lib/auth";
 import { verifyPassword } from "@/lib/password";
 import { checkRateLimit, clientIp, rateLimitKey } from "@/lib/rate-limit";
-import { isSessionConfigured, SESSION_COOKIE, SESSION_TTL_SECONDS, signSession } from "@/lib/session";
+import { isSessionConfigured, SESSION_COOKIE } from "@/lib/session";
+import { setSessionCookie } from "@/lib/session-cookie";
 import { createServiceClient } from "@/lib/supabase/service";
 
 export type LoginState = { error?: string; email?: string };
@@ -45,21 +47,27 @@ export async function login(_prev: LoginState, formData: FormData): Promise<Logi
   ]);
   if (!ipOk || !accountOk) return { error: "Too many attempts. Please wait 15 minutes and try again.", email };
 
-  const { data: admin } = await db.from("admins").select("email, password_hash").eq("email", email).maybeSingle();
+  const { data: admin } = await db
+    .from("admins")
+    .select("email, password_hash, session_version")
+    .eq("email", email)
+    .maybeSingle();
   const valid = await verifyPassword(password, admin?.password_hash ?? DUMMY_HASH);
   if (!admin?.password_hash || !valid) return { error: GENERIC_ERROR, email };
 
-  (await cookies()).set(SESSION_COOKIE, await signSession(email), {
-    httpOnly: true,
-    secure: process.env.NODE_ENV === "production",
-    sameSite: "lax",
-    path: "/",
-    maxAge: SESSION_TTL_SECONDS,
-  });
+  await setSessionCookie(email, admin.session_version);
   redirect(safeNext(formData.get("next")));
 }
 
+/** Signs out everywhere: bumping the version invalidates every issued token. */
 export async function signOut() {
+  const admin = await getAdmin();
+  if (admin) {
+    await admin.supabase
+      .from("admins")
+      .update({ session_version: admin.sessionVersion + 1 })
+      .eq("email", admin.email);
+  }
   (await cookies()).delete(SESSION_COOKIE);
   redirect("/admin/login");
 }

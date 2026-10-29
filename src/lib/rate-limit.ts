@@ -4,10 +4,18 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 
 export const LEAD_RATE_LIMIT = { limit: 5, windowSeconds: 10 * 60 };
 
-/** Best-effort client IP from the proxy headers set by Vercel / Render / etc. */
+/**
+ * Client IP for rate limiting. Prefer headers the hosting platform sets itself
+ * (Vercel overwrites these, so visitors can't forge them); X-Forwarded-For's
+ * first entry is only a fallback because some proxies pass client values through.
+ */
 export function clientIp(headers: Headers): string {
-  const forwarded = headers.get("x-forwarded-for")?.split(",")[0]?.trim();
-  return forwarded || headers.get("x-real-ip") || "unknown";
+  return (
+    headers.get("x-vercel-forwarded-for")?.split(",")[0]?.trim() ||
+    headers.get("x-real-ip")?.trim() ||
+    headers.get("x-forwarded-for")?.split(",")[0]?.trim() ||
+    "unknown"
+  );
 }
 
 /** We never store raw IPs — only a salted hash used as the limiter key. */

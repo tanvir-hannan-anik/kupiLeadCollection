@@ -33,6 +33,11 @@ export async function POST(req: NextRequest) {
     return json({ ok: false, error: "Unsupported content type." }, 415);
   }
 
+  // Refuse oversized bodies before reading them into memory.
+  const declared = Number(req.headers.get("content-length") ?? 0);
+  if (declared > MAX_BODY_BYTES) {
+    return json({ ok: false, error: "Submission is too large." }, 413);
+  }
   const raw = await req.text();
   if (raw.length > MAX_BODY_BYTES) {
     return json({ ok: false, error: "Submission is too large." }, 413);
