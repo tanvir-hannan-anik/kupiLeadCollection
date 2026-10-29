@@ -16,12 +16,21 @@ export type LoginState = {
 
 const emailSchema = z.string().trim().toLowerCase().pipe(z.email());
 
+/**
+ * Where the sign-in link should bring the admin back to: the site they are
+ * actually using (localhost, a Vercel preview or production). This is safe to
+ * take from the request because Supabase only honours redirect URLs on its
+ * allow-list (Authentication → URL Configuration). NEXT_PUBLIC_APP_URL is only
+ * a fallback, so a leftover "http://localhost:3000" can't break production.
+ */
 async function appOrigin() {
-  if (process.env.NEXT_PUBLIC_APP_URL) return process.env.NEXT_PUBLIC_APP_URL.replace(/\/$/, "");
   const h = await headers();
   const host = h.get("x-forwarded-host") ?? h.get("host");
-  const proto = h.get("x-forwarded-proto") ?? "http";
-  return `${proto}://${host}`;
+  if (host) {
+    const proto = h.get("x-forwarded-proto") ?? (host.startsWith("localhost") ? "http" : "https");
+    return `${proto}://${host}`;
+  }
+  return (process.env.NEXT_PUBLIC_APP_URL ?? "http://localhost:3000").replace(/\/$/, "");
 }
 
 const safeNext = (next: unknown) =>

@@ -145,7 +145,11 @@ With a provider configured, set `LEAD_NOTIFY_EMAIL` (comma-separated) to get an 
 Works on any Node host (Vercel, Render, etc.):
 
 1. Push the repo, create the project, set every variable from `.env.example` in the host's environment settings.
-2. Set `NEXT_PUBLIC_APP_URL` to the deployed URL and add `<url>/auth/callback` to Supabase redirect URLs.
+2. **Supabase → Authentication → URL Configuration** (required, or admin sign-in links point to localhost):
+   - *Site URL*: your production URL, e.g. `https://kupi-lead-collection.vercel.app`
+   - *Redirect URLs*: add `https://kupi-lead-collection.vercel.app/**` (and keep `http://localhost:3000/**` for local dev)
+   Set `NEXT_PUBLIC_APP_URL` to the deployed URL too.
+   **Supabase → Authentication → SMTP Settings**: without custom SMTP, Supabase only emails members of your Supabase team, so other admins never receive their sign-in email. Use the same Gmail App Password as the follow-up emails.
 3. Build `npm run build`, start `npm start` (Render: build command `npm install && npm run build`, start command `npm start`).
 4. To embed or post to the API from the main site, add its origin to `LEAD_ALLOWED_ORIGINS`.
 

@@ -26,7 +26,12 @@ export async function notifyNewLead(lead: NewLead): Promise<void> {
   if (!isEmailConfigured()) return;
 
   const to = process.env.LEAD_NOTIFY_EMAIL!.split(",").map((s) => s.trim()).filter(Boolean);
-  const appUrl = (process.env.NEXT_PUBLIC_APP_URL ?? "").replace(/\/$/, "");
+  // On Vercel, ignore a leftover localhost value and use the production domain.
+  const configured = process.env.NEXT_PUBLIC_APP_URL ?? "";
+  const vercelProd = process.env.VERCEL_PROJECT_PRODUCTION_URL;
+  const appUrl = (
+    vercelProd && (!configured || configured.includes("localhost")) ? `https://${vercelProd}` : configured
+  ).replace(/\/$/, "");
   const link = appUrl ? `${appUrl}/admin/leads/${lead.id}` : null;
   const interest = interestLabel(lead.interest);
 
